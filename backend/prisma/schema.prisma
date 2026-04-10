@@ -1,0 +1,311 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+// Prisma schema for Finance + AI Expense Tracker
+// This schema is optimized for scalability, data consistency, and production usage
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+//////////////////////////////////////////////////////
+// ENUMS
+//////////////////////////////////////////////////////
+
+/// User roles for authorization
+enum Role {
+  USER
+  ADMIN
+}
+
+/// Transaction type: income or expense
+enum TransactionType {
+  INCOME
+  EXPENSE
+}
+
+/// Recurring frequency for schedules
+enum Frequency {
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+//////////////////////////////////////////////////////
+// USER
+//////////////////////////////////////////////////////
+
+/// Main user table: authentication + profile + security
+model User {
+  id        String  @id @default(uuid())
+  email     String  @unique
+  password  String
+  full_name String?
+  role      Role    @default(USER)
+
+  /// OTP for account verification
+  verify_otp           String?
+  verify_otp_expire_at DateTime?
+  is_account_verified  Boolean   @default(false)
+
+  /// OTP for password reset
+  reset_otp           String?
+  reset_otp_expire_at DateTime?
+
+  /// Soft delete support (recommended for production)
+  deleted_at DateTime?
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  //////////////////////////////////////////////////////
+  /// Relations
+  //////////////////////////////////////////////////////
+
+  transactions   Transaction[]
+  schedules      Schedule[]
+  tags           Tag[]
+  budgets        Budget[]
+  savingGoals    SavingGoal[]
+  recurringRules RecurringRule[]
+  categories     Category[]
+  auditLogs      AuditLog[]
+}
+
+//////////////////////////////////////////////////////
+// CATEGORY (NEW - replaces string category)
+//////////////////////////////////////////////////////
+
+/// Category for transactions (avoid string inconsistency)
+model Category {
+  id      String @id @default(uuid())
+  user_id String
+  name    String
+
+  created_at DateTime @default(now())
+
+  /// Relations
+  user         User          @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  transactions Transaction[]
+  budgets      Budget[]
+
+  /// Prevent duplicate category names per user
+  @@unique([user_id, name])
+  @@index([user_id])
+}
+
+//////////////////////////////////////////////////////
+// TRANSACTIONS
+//////////////////////////////////////////////////////
+
+/// Financial transactions (income/expense)
+model Transaction {
+  id          String          @id @default(uuid())
+  user_id     String
+  category_id String?
+  type        TransactionType
+
+  /// Use Decimal for financial accuracy
+  amount Decimal @db.Decimal(12, 2)
+
+  note             String?
+  transaction_date DateTime
+
+  created_at DateTime @default(now())
+
+  //////////////////////////////////////////////////////
+  /// Relations
+  //////////////////////////////////////////////////////
+
+  user             User             @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  category         Category?        @relation(fields: [category_id], references: [id])
+  transaction_tags TransactionTag[]
+
+  //////////////////////////////////////////////////////
+  /// Indexes (optimized for queries)
+  //////////////////////////////////////////////////////
+
+  @@index([user_id])
+  @@index([transaction_date])
+  @@index([user_id, transaction_date]) // important for dashboard queries
+}
+
+//////////////////////////////////////////////////////
+// BUDGET
+//////////////////////////////////////////////////////
+
+/// Budget tracking: limit spending within a time range
+model Budget {
+  id          String  @id @default(uuid())
+  user_id     String
+  category_id String?
+  amount      Decimal @db.Decimal(12, 2)
+
+  start_date DateTime
+  end_date   DateTime
+
+  created_at DateTime @default(now())
+
+  /// Relations
+  user     User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  category Category? @relation(fields: [category_id], references: [id])
+
+  /// Prevent duplicate budgets
+  @@unique([user_id, category_id, start_date, end_date])
+  @@index([user_id])
+}
+
+//////////////////////////////////////////////////////
+// SAVING GOALS
+//////////////////////////////////////////////////////
+
+/// Saving goals: track progress toward financial targets
+model SavingGoal {
+  id      String @id @default(uuid())
+  user_id String
+
+  title String
+
+  /// Financial values stored as Decimal
+  target_amount  Decimal @db.Decimal(12, 2)
+  current_amount Decimal @default(0) @db.Decimal(12, 2)
+
+  is_completed Boolean @default(false)
+
+  start_date  DateTime
+  target_date DateTime?
+
+  created_at DateTime @default(now())
+
+  /// Relations
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+}
+
+//////////////////////////////////////////////////////
+// SCHEDULE
+//////////////////////////////////////////////////////
+
+/// User schedules (calendar events)
+model Schedule {
+  id          String    @id @default(uuid())
+  user_id     String
+  title       String
+  description String?
+  start_time  DateTime
+  end_time    DateTime?
+  is_all_day  Boolean   @default(false)
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  /// Relations
+  user      User       @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  reminders Reminder[]
+
+  @@index([user_id, start_time])
+}
+
+//////////////////////////////////////////////////////
+// REMINDER
+//////////////////////////////////////////////////////
+
+/// Reminder for schedule events
+model Reminder {
+  id          String   @id @default(uuid())
+  schedule_id String
+  remind_at   DateTime
+  is_sent     Boolean  @default(false)
+
+  created_at DateTime @default(now())
+
+  /// Relations
+  schedule Schedule @relation(fields: [schedule_id], references: [id], onDelete: Cascade)
+
+  @@index([remind_at])
+}
+
+//////////////////////////////////////////////////////
+// RECURRING RULE
+//////////////////////////////////////////////////////
+
+/// Recurring schedule rules (daily, weekly, monthly)
+model RecurringRule {
+  id      String @id @default(uuid())
+  user_id String
+
+  /// Use enum instead of string for consistency
+  frequency Frequency
+  interval  Int       @default(1)
+
+  start_date DateTime
+  end_date   DateTime?
+
+  created_at DateTime @default(now())
+
+  /// Relations
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+}
+
+//////////////////////////////////////////////////////
+// TAGS
+//////////////////////////////////////////////////////
+
+/// User-defined tags for transactions
+model Tag {
+  id      String @id @default(uuid())
+  user_id String
+  name    String
+
+  /// Relations
+  user             User             @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  transaction_tags TransactionTag[]
+
+  /// Prevent duplicate tag names per user
+  @@unique([user_id, name])
+  @@index([user_id])
+}
+
+//////////////////////////////////////////////////////
+// TRANSACTION TAG (MANY-TO-MANY)
+//////////////////////////////////////////////////////
+
+/// Join table between Transaction and Tag
+model TransactionTag {
+  transaction_id String
+  tag_id         String
+
+  /// Relations
+  transaction Transaction @relation(fields: [transaction_id], references: [id], onDelete: Cascade)
+  tag         Tag         @relation(fields: [tag_id], references: [id], onDelete: Cascade)
+
+  @@id([transaction_id, tag_id])
+}
+
+//////////////////////////////////////////////////////
+// AUDIT LOG
+//////////////////////////////////////////////////////
+
+/// System audit logs for tracking actions (admin/debugging)
+model AuditLog {
+  id         String   @id @default(uuid())
+  user_id    String?
+  action     String?
+  metadata   Json?
+  created_at DateTime @default(now())
+
+  /// Optional relation (user may be deleted)
+  user User? @relation(fields: [user_id], references: [id], onDelete: SetNull)
+
+  @@index([user_id])
+}
